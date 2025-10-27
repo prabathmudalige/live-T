@@ -1,0 +1,7 @@
+{
+  "name": "Copy of Live Conversation Translator",
+  "description": "A real-time conversation and translation app powered by the Gemini 2.5 Native Audio (Live API). Speak in one language and hear the translated response instantly.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}

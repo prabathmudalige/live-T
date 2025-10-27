@@ -8,6 +8,8 @@ import { StatusIndicator } from './components/StatusIndicator';
 import { AudioControls } from './components/AudioControls';
 import { ThemeSwitcher } from './components/ThemeSwitcher';
 import { EntryPage } from './components/EntryPage';
+import { AudioInputSettings } from './components/AudioInputSettings';
+import { VoiceSelector } from './components/VoiceSelector';
 
 const App: React.FC = () => {
   const [isAppEntered, setIsAppEntered] = useState(false);
@@ -20,6 +22,13 @@ const App: React.FC = () => {
   const [isPlaying, setIsPlaying] = useState(true);
   const [volume, setVolume] = useState(1);
   const [theme, setTheme] = useState('dark');
+  const [voice, setVoice] = useState<'female' | 'male'>('female');
+  const [noiseSuppression, setNoiseSuppression] = useState(true);
+  const [echoCancellation, setEchoCancellation] = useState(true);
+  const [autoGainControl, setAutoGainControl] = useState(true);
+  const [isUserSpeaking, setIsUserSpeaking] = useState(false);
+  const [isModelSpeaking, setIsModelSpeaking] = useState(false);
+  const [micVolume, setMicVolume] = useState(0);
 
   const currentInputTranscriptionRef = useRef('');
   const currentOutputTranscriptionRef = useRef('');
@@ -65,12 +74,21 @@ const App: React.FC = () => {
     onTranscriptUpdate,
     isPlaying,
     volume,
+    voice,
+    noiseSuppression,
+    echoCancellation,
+    autoGainControl,
+    onUserSpeakingChange: setIsUserSpeaking,
+    onModelSpeakingChange: setIsModelSpeaking,
+    onVolumeLevelChange: setMicVolume,
   });
 
   const handleToggleConversation = () => {
     if (isRecording) {
       stopSession();
       setIsRecording(false);
+      setIsUserSpeaking(false);
+      setIsModelSpeaking(false);
     } else {
       setTranscripts([]);
       currentInputTranscriptionRef.current = '';
@@ -93,6 +111,13 @@ const App: React.FC = () => {
 
   const handleEnterApp = () => {
     setIsAppEntered(true);
+  };
+
+  const handleLanguageSwap = () => {
+    if (isRecording) return;
+    const temp = sourceLang;
+    setSourceLang(targetLang);
+    setTargetLang(temp);
   };
 
   useEffect(() => {
@@ -124,23 +149,52 @@ const App: React.FC = () => {
                 <div className="w-full bg-gray-50 dark:bg-gray-800 rounded-2xl shadow-2xl flex flex-col overflow-hidden border border-gray-200 dark:border-gray-700">
                     <div className="p-4 md:p-6 border-b border-gray-200 dark:border-gray-700">
                         <h2 className="text-lg font-semibold mb-3 text-gray-600 dark:text-gray-300">Configuration</h2>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <LanguageSelector
-                            label="You Speak"
-                            selectedLanguage={sourceLang}
-                            onSelectLanguage={setSourceLang}
-                            disabled={isRecording}
-                        />
-                        <LanguageSelector
-                            label="AI Responds In"
-                            selectedLanguage={targetLang}
-                            onSelectLanguage={setTargetLang}
-                            disabled={isRecording}
-                        />
+                        <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_1fr] items-center gap-4">
+                            <LanguageSelector
+                                label="Language 1"
+                                selectedLanguage={sourceLang}
+                                onSelectLanguage={setSourceLang}
+                                disabled={isRecording}
+                            />
+                            <button
+                                onClick={handleLanguageSwap}
+                                disabled={isRecording}
+                                className="p-2 rounded-full text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-white dark:focus:ring-offset-gray-900 focus:ring-blue-500 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed mx-auto md:mt-5"
+                                aria-label="Swap languages"
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 transform rotate-90 md:rotate-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                                </svg>
+                            </button>
+                            <LanguageSelector
+                                label="Language 2"
+                                selectedLanguage={targetLang}
+                                onSelectLanguage={setTargetLang}
+                                disabled={isRecording}
+                            />
                         </div>
+                        <VoiceSelector
+                          selectedVoice={voice}
+                          onSelectVoice={setVoice}
+                          disabled={isRecording}
+                        />
+                        <AudioInputSettings
+                            noiseSuppression={noiseSuppression}
+                            echoCancellation={echoCancellation}
+                            autoGainControl={autoGainControl}
+                            onNoiseSuppressionChange={setNoiseSuppression}
+                            onEchoCancellationChange={setEchoCancellation}
+                            onAutoGainControlChange={setAutoGainControl}
+                            disabled={isRecording}
+                            micVolume={micVolume}
+                        />
                     </div>
                     
-                    <TranscriptDisplay transcripts={transcripts} />
+                    <TranscriptDisplay 
+                        transcripts={transcripts} 
+                        isUserSpeaking={isUserSpeaking}
+                        isModelSpeaking={isModelSpeaking}
+                    />
 
                     <div className="p-4 md:p-6 mt-auto bg-gray-50/50 dark:bg-gray-800/50 border-t border-gray-200 dark:border-gray-700 flex flex-col items-center gap-4">
                         <div className="w-full flex justify-between items-center">

@@ -9,6 +9,13 @@ interface UseGeminiLiveProps {
   onTranscriptUpdate: (type: 'input' | 'output' | 'turnComplete', text?: string) => void;
   isPlaying: boolean;
   volume: number;
+  voice: 'female' | 'male';
+  noiseSuppression: boolean;
+  echoCancellation: boolean;
+  autoGainControl: boolean;
+  onUserSpeakingChange: (isSpeaking: boolean) => void;
+  onModelSpeakingChange: (isSpeaking: boolean) => void;
+  onVolumeLevelChange: (level: number) => void;
 }
 
 // Audio utility functions
@@ -70,6 +77,13 @@ export const useGeminiLive = ({
   onTranscriptUpdate,
   isPlaying,
   volume,
+  voice,
+  noiseSuppression,
+  echoCancellation,
+  autoGainControl,
+  onUserSpeakingChange,
+  onModelSpeakingChange,
+  onVolumeLevelChange,
 }: UseGeminiLiveProps) => {
   const sessionRef = useRef<LiveSession | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -79,6 +93,8 @@ export const useGeminiLive = ({
   const outputGainNodeRef = useRef<GainNode | null>(null);
   const nextStartTimeRef = useRef(0);
   const audioSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
+  const userSpeakingTimeoutRef = useRef<number | null>(null);
+  const modelSpeakingTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (outputGainNodeRef.current && outputAudioContextRef.current) {
@@ -90,6 +106,10 @@ export const useGeminiLive = ({
 
   const stopSession = useCallback(() => {
     onStatusChange('closing');
+    onVolumeLevelChange(0);
+
+    if (userSpeakingTimeoutRef.current) clearTimeout(userSpeakingTimeoutRef.current);
+    if (modelSpeakingTimeoutRef.current) clearTimeout(modelSpeakingTimeoutRef.current);
     
     if (sessionRef.current) {
       sessionRef.current.close();
@@ -125,13 +145,13 @@ export const useGeminiLive = ({
     audioSourcesRef.current.clear();
     
     onStatusChange('idle');
-  }, [onStatusChange]);
+  }, [onStatusChange, onVolumeLevelChange]);
 
   const startSession = useCallback(async () => {
     onStatusChange('connecting');
     try {
       if (!process.env.API_KEY) {
-        throw new Error("API_KEY environment variable not set");
+        throw new Error("API_KEY environment variable not set. Please follow the setup instructions.");
       }
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       
@@ -141,25 +161,55 @@ export const useGeminiLive = ({
       outputGainNodeRef.current.gain.value = isPlaying ? volume : 0;
       nextStartTimeRef.current = 0;
 
+      const voiceName = voice === 'female' ? 'Kore' : 'Zephyr';
+
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-09-2025',
         config: {
           responseModalities: [Modality.AUDIO],
           inputAudioTranscription: {},
           outputAudioTranscription: {},
-          systemInstruction: `You are a live translator. The user is speaking ${sourceLang}. Listen to what they say, translate it to ${targetLang}, and respond naturally in ${targetLang}. Keep your responses concise.`,
+          speechConfig: {
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: voiceName } },
+          },
+          systemInstruction: `You are a live, two-way conversation translator and interpreter. A person speaking ${sourceLang} and a person speaking ${targetLang} are having a conversation. Your role is to listen to each person and translate what they say into the other person's language in real-time. When you hear ${sourceLang}, you must translate it and speak in ${targetLang}. When you hear ${targetLang}, you must translate it and speak in ${sourceLang}. Be a seamless interpreter for their conversation. Keep translations accurate and concise.`,
         },
         callbacks: {
           onopen: async () => {
             onStatusChange('connected');
             audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
-            mediaStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaStreamRef.current = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    noiseSuppression,
+                    echoCancellation,
+                    autoGainControl,
+                },
+            });
 
             const source = audioContextRef.current.createMediaStreamSource(mediaStreamRef.current);
             scriptProcessorRef.current = audioContextRef.current.createScriptProcessor(4096, 1, 1);
 
             scriptProcessorRef.current.onaudioprocess = (audioProcessingEvent) => {
               const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
+
+              let sum = 0;
+              for (let i = 0; i < inputData.length; i++) {
+                  sum += inputData[i] * inputData[i];
+              }
+              const rms = Math.sqrt(sum / inputData.length);
+              onVolumeLevelChange(rms);
+
+              const volumeThreshold = 0.01;
+              if (rms > volumeThreshold) {
+                  onUserSpeakingChange(true);
+                  if (userSpeakingTimeoutRef.current) {
+                      clearTimeout(userSpeakingTimeoutRef.current);
+                  }
+                  userSpeakingTimeoutRef.current = window.setTimeout(() => {
+                      onUserSpeakingChange(false);
+                  }, 500);
+              }
+
               const pcmBlob = createBlob(inputData);
               sessionPromise.then((session) => {
                   session.sendRealtimeInput({ media: pcmBlob });
@@ -187,6 +237,17 @@ export const useGeminiLive = ({
                 nextStartTimeRef.current = Math.max(nextStartTimeRef.current, outputCtx.currentTime);
 
                 const audioBuffer = await decodeAudioData(decode(base64Audio), outputCtx, 24000, 1);
+                
+                onModelSpeakingChange(true);
+                if (modelSpeakingTimeoutRef.current) {
+                  clearTimeout(modelSpeakingTimeoutRef.current);
+                }
+                const durationMs = audioBuffer.duration * 1000;
+                modelSpeakingTimeoutRef.current = window.setTimeout(() => {
+                  onModelSpeakingChange(false);
+                }, durationMs + 200);
+
+
                 const source = outputCtx.createBufferSource();
                 source.buffer = audioBuffer;
                 source.connect(gainNode);
@@ -202,7 +263,7 @@ export const useGeminiLive = ({
           },
           onerror: (e) => {
             console.error('Session error:', e);
-            onStatusChange('error', 'Connection failed. Please check your network and API key.');
+            onStatusChange('error', 'Connection failed. Please check network and API key.');
             stopSession();
           },
           onclose: () => {
@@ -215,10 +276,37 @@ export const useGeminiLive = ({
 
     } catch (error) {
       console.error('Failed to start session:', error);
-      onStatusChange('error', 'Failed to initialize session. Please check your API key.');
+      let errorMessage = 'An unexpected error occurred.';
+       if (error instanceof Error) {
+            errorMessage = error.message;
+        }
+
+      if (error instanceof DOMException) {
+          switch (error.name) {
+              case 'NotAllowedError':
+              case 'PermissionDeniedError':
+                  errorMessage = 'Microphone permission denied. Please allow access in browser settings.';
+                  break;
+              case 'NotFoundError':
+              case 'DevicesNotFoundError':
+                  errorMessage = 'No microphone found. Please connect a device.';
+                  break;
+              case 'NotReadableError':
+              case 'TrackStartError':
+                   errorMessage = 'Microphone is already in use by another application.';
+                   break;
+              default:
+                  errorMessage = 'Could not access microphone. Please check device and permissions.';
+                  break;
+          }
+      }
+      onStatusChange('error', errorMessage);
       stopSession();
     }
-  }, [sourceLang, targetLang, onStatusChange, onTranscriptUpdate, stopSession, isPlaying, volume]);
+  }, [
+      sourceLang, targetLang, onStatusChange, onTranscriptUpdate, stopSession, isPlaying, volume, voice,
+      noiseSuppression, echoCancellation, autoGainControl, onUserSpeakingChange, onModelSpeakingChange, onVolumeLevelChange,
+  ]);
 
   return { startSession, stopSession };
 };
